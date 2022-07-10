@@ -1,0 +1,14 @@
+#!/usr/bin/env zsh
+
+# Install & update copy of devbens/bens
+git-clone-pull https://github.com/devbens/bens.git /usr/local/share/bens
+cd /usr/local/share/bens && git checkout --track origin/v2
+
+# Symlink bn command in /usr/local/bin directory
+ln -sf /usr/local/share/bens/cli/bn /usr/local/bin/bn
+
+# Install & update copy of devbens/workspace
+git-clone-pull https://github.com/devbens/workspace.git /usr/local/share/workspace
+
+# Continue by running update command in workspace's share/bin directory
+[ -e /usr/local/share/workspace/share/bin/update ] && /usr/local/share/workspace/share/bin/update

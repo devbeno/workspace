@@ -1,0 +1,163 @@
+#!/usr/bin/env zsh
+
+# https://wiki.archlinux.org/title/XDG_Base_Directory
+config="/usr/local/config" # XDG_CONFIG_HOME
+share="/usr/local/share"   # XDG_DATA_HOME
+cache="/usr/local/cache"   # XDG_CACHE_HOME
+
+# Shell helper functions
+source $config/zsh/helpers.sh
+
+echo_main() {
+  defined $1 || return
+  echo
+  echo_line blue
+  echo "$(echo_color black/on_blue " ★ ") $(echo_color blue " ${@} ")"
+  echo_line blue
+}
+
+echo_next() {
+  defined $1 || return
+  echo
+  echo "$(echo_color black/on_green " ▶︎ ") $(echo_color green " ${@} ")"
+}
+
+echo_run() {
+  defined $1 || return
+  echo "$1"
+  eval "$1"
+}
+
+# Append line to end of file if it doesn't exist
+append() {
+  echo "\"$1\" >> $2"
+  grep -q "^$1" $2 || echo "$1" >> $2
+}
+
+echo_main "Running updates on workspace"
+
+# symlink configs to home directory
+mkdir -p /work/.local
+has /work/.local/share || ln -s $share /work/.local/share
+has /work/.config || ln -s $config /work/.config
+has /work/.cache || ln -s $cache /work/.cache
+
+# Update password for user
+SUDO_PASSWORD="$(get-env SUDO_PASSWORD secret)"
+if [ "$(whoami)" = "root" ]; then
+  echo_next "Updating sudo password"
+  defined "$SUDO_PASSWORD" && echo "work:${SUDO_PASSWORD}" | chpasswd
+fi
+
+# Private images are pushed/pulled from here
+DO_AUTH_TOKEN="$(get-env DO_AUTH_TOKEN)"
+DOCKER_REGISTRY="$(get-env DOCKER_REGISTRY registry.digitalocean.com/devbens)"
+if defined $DO_AUTH_TOKEN && defined $DOCKER_REGISTRY; then
+  echo_next "Logging into Docker Registry"
+  docker --context default login -u $DO_AUTH_TOKEN -p $DO_AUTH_TOKEN $DOCKER_REGISTRY
+fi
+
+# Docker buildx
+if hasnt $share/docker/cli-plugins/docker-buildx; then
+  echo_next "Linking docker buildx"
+  mkdir -p $share/docker/cli-plugins
+  ln -sf /usr/bin/docker-buildx $share/docker/cli-plugins/docker-buildx
+fi
+
+# Git & Github
+echo_next "Updating git config"
+GIT_USER_NAME="$(get-env GIT_USER_NAME devbens)" \
+GIT_USER_EMAIL="$(get-env GIT_USER_EMAIL benjophp@gmail.com)" \
+echo_run "esh $config/git/config.esh > $config/git/config"
+
+echo_next "Updating git credentials"
+GITHUB_USER="$(get-env GITHUB_USER devbens-studios)" \
+GITHUB_TOKEN="$(get-env GITHUB_TOKEN)" \
+echo_run "esh $config/git/credentials.esh > $config/git/credentials"
+
+# Settings for mysql client
+echo_next "Updating mysql config"
+DB_HOST="$(get-env DB_HOST 127.0.0.1)" \
+DB_PORT="$(get-env DB_PORT 3306)" \
+DB_ROOT_USER="$(get-env DB_ROOT_USER root)" \
+DB_ROOT_PASSWORD="$(get-env DB_ROOT_PASSWORD secret)" \
+echo_run "esh $config/mysql/my.cnf.esh > $config/mysql/my.cnf"
+if [ "$(whoami)" = "root" ]; then
+  ln -sf $config/mysql/my.cnf /etc/mysql/my.cnf
+fi
+
+# Password for code-server
+echo_next "Updating coder-server config"
+CODE_PASSWORD="$(get-env CODE_PASSWORD secret)" \
+echo_run "esh $config/code-server/config.yaml.esh > $config/code-server/config.yaml"
+
+# Default settings for code-server
+if hasnt $share/code-server/User/settings.json; then
+  echo_run "mkdir -p $share/code-server/User"
+  echo_run "cp $config/code-server/settings.json $share/code-server/User/settings.json"
+fi
+
+# Save copy of SWARMFILE that created this node's swarm
+mkdir -p $share/swarms
+SWARMFILE_CONTENTS="$(get-env SWARMFILE_CONTENTS)"
+if defined $SWARMFILE_CONTENTS; then
+  echo_next "Updating swarmfile"
+  echo "$share/swarms/$(get-env SWARM)"
+  echo $SWARMFILE_CONTENTS | base64 -d > $share/swarms/$(get-env SWARM)
+fi
+
+# Check swarm and install doctl if missing
+swarm ls
+
+# oh-my-zsh
+echo_next "Updating oh-my-zsh"
+mkdir -p $share/zsh
+git-clone-pull https://github.com/robbyrussell/oh-my-zsh.git $share/zsh/oh-my-zsh
+
+# fzf
+echo_next "Updating fzf"
+git-clone-pull https://github.com/junegunn/fzf.git $share/fzf
+
+# PHP Composer
+if hasnt /work/.composer; then
+  echo_next "Updating composer"
+  mkdir -p $share/composer 
+  ln -s $share/composer /work/.composer
+fi
+
+# WP-CLI
+if hasnt wp; then
+  composer global require wp-cli/wp-cli
+fi
+
+# npm
+if hasnt $share/npm; then
+  echo_next "Updating npm"
+  mkdir -p $share/npm $cache/npm
+fi
+
+# tmux plugin manager
+echo_next "Updating tmux"
+mkdir -p $share/tmux/plugins
+git-clone-pull https://github.com/tmux-plugins/tpm.git $share/tmux/plugins/tpm
+if has $share/tmux/plugins/tpm/bin/install_plugins; then 
+  echo "$share/tmux/plugins/tpm/bin/install_plugins"
+  $share/tmux/plugins/tpm/bin/install_plugins
+fi
+
+# vim-plug
+echo_next "Updating nvim"
+mkdir -p $share/nvim/site/{autoload,plugged}
+curl -fL https://github.com/junegunn/vim-plug/raw/master/plug.vim > $share/nvim/site/autoload/plug.vim
+has $share/nvim/site/autoload/custom.vim || cp $config/nvim/custom.vim $share/nvim/site/autoload/custom.vim
+echo "nvim +PlugInstall +qall >> /dev/null"
+nvim +PlugInstall +qall >> /dev/null
+
+
+# Permissions on user directories and docker.sock
+if [ "$(whoami)" = "root" ]; then
+  chown -R work:work /usr/local /work
+  chown -R work: /var/run/docker.sock
+fi
+
+echo_next "...done!"
